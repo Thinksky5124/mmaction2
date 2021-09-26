@@ -9,6 +9,7 @@ import mmcv
 import numpy as np
 
 from ..core import average_recall_at_avg_proposals
+from ..localization import wrapper_compute_average_precision
 from .base import BaseDataset
 from .builder import DATASETS
 
@@ -74,8 +75,14 @@ class ActivityNetDataset(BaseDataset):
             Default: False.
     """
 
-    def __init__(self, ann_file, pipeline, data_prefix=None, test_mode=False):
+    def __init__(self, ann_file, pipeline, data_prefix=None, test_mode=False, test_cfg=None):
         super().__init__(ann_file, pipeline, data_prefix, test_mode)
+        action_classes_path = test_cfg.action_classes_path
+        self.evaluater = test_cfg.evaluater
+        if action_classes_path is not None:
+            _action_classes_path = action_classes_path
+            anno_database = mmcv.load(_action_classes_path)
+            self.action_classes_list = anno_database['action_classes']
 
     def load_annotations(self):
         """Load the annotation according to ann_file into video_infos."""
@@ -138,7 +145,7 @@ class ActivityNetDataset(BaseDataset):
         if show_progress:
             prog_bar = mmcv.ProgressBar(len(results))
         for result in results:
-            video_name = result['video_name']
+            video_name = 'v_' + result['video_name']
             result_dict[video_name[2:]] = result['proposal_list']
             if show_progress:
                 prog_bar.update()
@@ -187,6 +194,21 @@ class ActivityNetDataset(BaseDataset):
             raise ValueError(
                 f'The output format {output_format} is not supported.')
 
+    def results_to_detections(self, results, version='VERSION 1.3', top_k=2000, **kwargs):
+        """Fetch results instances of the entire dataset."""
+        result_dict = self.proposals2json(results)
+        output_dict = {
+            'version': version,
+            'results': result_dict,
+            'external_data': {}
+        }
+        return output_dict
+
+    def get_all_gts(self):
+        """Fetch groundtruth instances of the entire dataset."""
+        anno_dict = mmcv.load(self.ann_file)
+        return anno_dict
+
     def evaluate(
             self,
             results,
@@ -195,7 +217,10 @@ class ActivityNetDataset(BaseDataset):
                 'AR@AN':
                 dict(
                     max_avg_proposals=100,
-                    temporal_iou_thresholds=np.linspace(0.5, 0.95, 10))
+                    temporal_iou_thresholds=np.linspace(0.5, 0.95, 10)),
+                'mAP':
+                dict(
+                    mAP=dict(eval_dataset='anet'))
             },
             logger=None,
             **deprecated_kwargs):
@@ -227,6 +252,8 @@ class ActivityNetDataset(BaseDataset):
                 'for more details')
             metric_options['AR@AN'] = dict(metric_options['AR@AN'],
                                            **deprecated_kwargs)
+            metric_options['mAP'] = dict(metric_options['mAP'],
+                                         **deprecated_kwargs)
 
         if not isinstance(results, list):
             raise TypeError(f'results must be a list, but got {type(results)}')
@@ -235,17 +262,18 @@ class ActivityNetDataset(BaseDataset):
             f'{len(results)} != {len(self)}')
 
         metrics = metrics if isinstance(metrics, (list, tuple)) else [metrics]
-        allowed_metrics = ['AR@AN']
+        allowed_metrics = ['AR@AN','mAP']
         for metric in metrics:
             if metric not in allowed_metrics:
                 raise KeyError(f'metric {metric} is not supported')
 
         eval_results = OrderedDict()
-        ground_truth = self._import_ground_truth()
-        proposal, num_proposals = self._import_proposals(results)
+        
 
         for metric in metrics:
             if metric == 'AR@AN':
+                ground_truth = self._import_ground_truth()
+                proposal, num_proposals = self._import_proposals(results)
                 temporal_iou_thresholds = metric_options.setdefault(
                     'AR@AN', {}).setdefault('temporal_iou_thresholds',
                                             np.linspace(0.5, 0.95, 10))
@@ -266,5 +294,18 @@ class ActivityNetDataset(BaseDataset):
                 eval_results['AR@5'] = np.mean(recall[:, 4])
                 eval_results['AR@10'] = np.mean(recall[:, 9])
                 eval_results['AR@100'] = np.mean(recall[:, 99])
+            elif metric == 'mAP':
+                detections = self.results_to_detections(results, **self.evaluater)
+                # get gts
+                all_gts = self.get_all_gts()
+                
+                eval_dataset = metric_options[metric][metric]['eval_dataset']
+                if eval_dataset == 'anet':
+                    iou_range = np.arange(0.5, 1.0, .05)
+                    ap_values = wrapper_compute_average_precision(detections, all_gts, iou_range, self.action_classes_list)
+                    map_ious = ap_values.mean(axis=1)
+
+                    for iou, map_iou in zip(iou_range, map_ious):
+                        eval_results[f'mAP@{iou:.02f}'] = map_iou
 
         return eval_results

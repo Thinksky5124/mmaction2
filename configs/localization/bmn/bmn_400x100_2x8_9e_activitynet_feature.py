@@ -6,9 +6,20 @@ _base_ = [
 dataset_type = 'ActivityNetDataset'
 data_root = 'data/ActivityNet/activitynet_feature_cuhk/csv_mean_100/'
 data_root_val = 'data/ActivityNet/activitynet_feature_cuhk/csv_mean_100/'
-ann_file_train = 'data/ActivityNet/anet_anno_train.json'
-ann_file_val = 'data/ActivityNet/anet_anno_val.json'
-ann_file_test = 'data/ActivityNet/anet_anno_val.json'
+ann_file_train = 'data/ActivityNet/cuhk_annotataions/anet_anno_train.json'
+ann_file_val = 'data/ActivityNet/cuhk_annotataions/anet_anno_val.json'
+ann_file_test = 'data/ActivityNet/cuhk_annotataions/anet_anno_val.json'
+action_classes_path = 'data/ActivityNet/action_classes.json'
+
+train_cfg_ = dict(
+    action_classes_path=action_classes_path
+)
+
+test_cfg_ = dict(
+    action_classes_path=action_classes_path,
+    evaluater=dict(
+            top_k=2000)
+)
 
 test_pipeline = [
     dict(type='LoadLocalizationFeature'),
@@ -24,7 +35,7 @@ test_pipeline = [
 ]
 train_pipeline = [
     dict(type='LoadLocalizationFeature'),
-    dict(type='GenerateLocalizationLabels'),
+    dict(type='GenerateLocalizationLabels', gt_bbox_model='Proposal'),
     dict(
         type='Collect',
         keys=['raw_feature', 'gt_bbox'],
@@ -37,7 +48,7 @@ train_pipeline = [
 ]
 val_pipeline = [
     dict(type='LoadLocalizationFeature'),
-    dict(type='GenerateLocalizationLabels'),
+    dict(type='GenerateLocalizationLabels', gt_bbox_model='Proposal'),
     dict(
         type='Collect',
         keys=['raw_feature', 'gt_bbox'],
@@ -61,17 +72,20 @@ data = dict(
         type=dataset_type,
         ann_file=ann_file_test,
         pipeline=test_pipeline,
-        data_prefix=data_root_val),
+        data_prefix=data_root_val,
+        test_cfg=test_cfg_),
     val=dict(
         type=dataset_type,
         ann_file=ann_file_val,
         pipeline=val_pipeline,
-        data_prefix=data_root_val),
+        data_prefix=data_root_val,
+        test_cfg=test_cfg_),
     train=dict(
         type=dataset_type,
         ann_file=ann_file_train,
         pipeline=train_pipeline,
-        data_prefix=data_root))
+        data_prefix=data_root,
+        test_cfg=test_cfg_))
 evaluation = dict(interval=1, metrics=['AR@AN'])
 
 # optimizer

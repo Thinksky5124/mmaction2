@@ -1691,29 +1691,43 @@ class GenerateLocalizationLabels:
     "annotations", added or modified keys are "gt_bbox".
     """
 
-    def __call__(self, results):
-        """Perform the GenerateLocalizationLabels loading.
+    def __init__(
+                self,
+                gt_bbox_model):
+        self.gt_bbox_model = gt_bbox_model
+
+    def __call__(self,results):
+        """Perform the FineActionLocalizationLabels loading.
 
         Args:
+            gt_bbox_model(str): The groundtrue bounding box model options
+            there has ('Proposal','Localization')
+                default: 'Proposal'
             results (dict): The resulting dict to be modified and passed
                 to the next transform in pipeline.
         """
+        gt_bbox_model = self.gt_bbox_model
+
         video_frame = results['duration_frame']
         video_second = results['duration_second']
-        feature_frame = results['feature_frame']
-        corrected_second = float(feature_frame) / video_frame * video_second
         annotations = results['annotations']
 
-        gt_bbox = []
+        if gt_bbox_model == 'Proposal':
+            gt_bbox = []
+            feature_frame = np.floor(results['feature_frame'])
+            corrected_second = float(feature_frame) / video_frame * video_second
+            for annotation in annotations:
+                current_start = max(
+                    min(1, annotation['segment'][0] / corrected_second), 0)
+                current_end = max(
+                    min(1, annotation['segment'][1] / corrected_second), 0)
+                gt_bbox.append([current_start, current_end])
+            gt_bbox = np.array(gt_bbox)
+        elif gt_bbox_model == 'Localization':
+            gt_bbox = {'duration_second':video_second,'annotations':annotations,'feature_frame':results['feature_frame']}
+        else:
+            raise RuntimeError('LocalizationLabels has no support option:'+gt_bbox_model)
 
-        for annotation in annotations:
-            current_start = max(
-                min(1, annotation['segment'][0] / corrected_second), 0)
-            current_end = max(
-                min(1, annotation['segment'][1] / corrected_second), 0)
-            gt_bbox.append([current_start, current_end])
-
-        gt_bbox = np.array(gt_bbox)
         results['gt_bbox'] = gt_bbox
         return results
 
@@ -1796,3 +1810,74 @@ class LoadProposals:
                     f'proposal_ext={self.proposal_ext}, '
                     f'feature_ext={self.feature_ext})')
         return repr_str
+
+@PIPELINES.register_module()
+class LoadLocalizationI3DFeature:
+    """Load Video features for localizer with given video_name list.
+
+    Required keys are "video_name" and "data_prefix", added or modified keys
+    are "raw_feature".
+
+    Args:
+        raw_feature_ext (str): Raw feature file extension.  Default: '.csv'.
+    """
+
+    def __init__(self, dataset, temporal_dim = 100):
+        self.temporal_dim = temporal_dim
+        if dataset not in set(['thumos14','thumos14_ACMNat','AtivityNet','AtivityNet_ACMNet','FineAction']):
+            raise NotImplementedError
+        self.dataset = dataset
+
+    def __call__(self, results):
+        """Perform the LoadLocalizationFeature loading.
+
+        Args:
+            results (dict): The resulting dict to be modified and passed
+                to the next transform in pipeline.
+        """
+        video_name = results['video_name']
+        data_prefix = results['data_prefix']
+        if self.dataset == 'thumos14':
+            video_dir_name = video_name
+            rgb_data_path = osp.join(data_prefix + '/rgb', video_dir_name)
+            flow_data_path = osp.join(data_prefix + '/flow', video_dir_name)
+            rgb_features = torch.load(rgb_data_path)
+            if os.path.exists(flow_data_path):
+                flow_features = torch.load(flow_data_path)
+            else:
+                flow_features = torch.zeros(rgb_features.shape, dtype = rgb_features.dtype)
+            if rgb_features.shape[0] != flow_features.shape[0]:
+                expand = torch.zeros((1,rgb_features.shape[1]), dtype = rgb_features.dtype)
+                flow_features = torch.cat([expand,flow_features],axis=0)
+            pre_raw_feature = torch.cat([rgb_features,flow_features],axis=1)
+            pre_raw_feature = pre_raw_feature.numpy()
+        elif self.dataset == 'AtivityNet':
+            video_dir_name = video_name
+            rgb_data_path = osp.join(data_prefix + '/rgb', video_dir_name + '-rgb.npz')
+            flow_data_path = osp.join(data_prefix + '/flow', video_dir_name)
+            flow_features = torch.load(flow_data_path)
+            if os.path.exists(rgb_data_path):
+                rgb_features = np.load(rgb_data_path)['feature']
+                pre_raw_feature = np.transpose(rgb_features, (0, 2, 1))
+                rgb_features = pre_raw_feature.squeeze()
+                rgb_features = rgb_features.transpose(1, 0)
+            else:
+                rgb_features = torch.zeros((100, flow_features.shape[1]), dtype = flow_features.dtype)
+            pre_raw_feature = torch.cat([rgb_features,flow_features],axis=1)
+            pre_raw_feature = pre_raw_feature.numpy()
+        elif self.dataset == 'AtivityNet_ACMNet':
+            data_path = osp.join(data_prefix, video_name + '.npy')
+            pre_raw_feature = np.load(data_path)
+        elif self.dataset == 'thumos14_ACMNat':
+            data_path = osp.join(data_prefix, video_name + '.npy')
+            pre_raw_feature = np.load(data_path)
+        elif self.dataset == 'FineAction':
+            pass
+        else:
+            raise NotImplementedError
+        pre_raw_feature = pre_raw_feature.astype(np.float32)
+        raw_feature = np.transpose(pre_raw_feature, (1, 0))
+
+        results['raw_feature'] = raw_feature
+
+        return results

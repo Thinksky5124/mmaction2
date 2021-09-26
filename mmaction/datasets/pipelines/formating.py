@@ -422,3 +422,116 @@ class FormatGCNInput:
         repr_str = self.__class__.__name__
         repr_str += f"(input_format='{self.input_format}')"
         return repr_str
+
+@PIPELINES.register_module()
+class FeatureFormatShape:
+    """Format final feature shape to the given input_format.
+
+    Required keys are "raw_feature", added or modified
+    keys are "raw_feature" and "sample_len".
+
+    Args:
+        input_format (str): Define the final imgs format.
+        collapse (bool): To collpase input_format N... to ... (NCTHW to CTHW,
+            etc.) if N is 1. Should be set as True when training and testing
+            detectors. Default: False.
+    """
+
+    def __init__(self, sample_len, sample_model='random'):
+        self.sample_len = sample_len
+        self.sample_model = sample_model
+        if self.sample_model not in ['uniform', 'random', 'consecutive']:
+            raise ValueError(
+                f'The input sample model {self.input_format} is invalid.')
+
+    def uniform_sample(self, input_feature, sample_len):
+        input_len = input_feature.shape[0]
+        assert sample_len > 0, "WRONG SAMPLE_LEN {}, THIS PARAM MUST BE GREATER THAN 0.".format(sample_len)
+
+        # if input_len <= sample_len:
+        #     return np.arange(input_len).astype(int)
+        # samples = np.arange(sample_len) * input_len / sample_len
+        # samples = np.floor(samples)
+        # return torch.from_numpy(input_feature[samples.astype(int)])   
+
+        if input_len <= sample_len and input_len > 1:
+            sample_idxs = np.arange(input_len)
+        else:
+            if input_len == 1:
+                sample_len = 2
+            sample_scale = input_len / sample_len
+            sample_idxs = np.arange(sample_len) * sample_scale
+            sample_idxs = np.floor(sample_idxs)
+
+        return input_feature[sample_idxs.astype(np.int), :]
+        
+    def random_sample(self, input_feature, sample_len):
+        input_len = input_feature.shape[0]
+
+        # if sample_len == input_len:
+        #     samples =  np.arange(sample_len)
+        # samples = np.arange(sample_len) * input_len / sample_len
+        # for i in range(sample_len):
+        #     if i < sample_len - 1:
+        #         if int(samples[i]) != int(samples[i + 1]):
+        #             samples[i] = np.random.choice(range(int(samples[i]), int(samples[i + 1]) + 1))
+        #         else:
+        #             samples[i] = int(samples[i])
+        #     else:
+        #         if int(samples[i]) < input_len - 1:
+        #             samples[i] = np.random.choice(range(int(samples[i]), input_len))
+        #         else:
+        #             samples[i] = int(samples[i])
+        # return torch.from_numpy(input_feature[samples.astype(int)])   
+
+        assert sample_len > 0, "WRONG SAMPLE_LEN {}, THIS PARAM MUST BE GREATER THAN 0.".format(sample_len)
+        
+        if input_len < sample_len:
+            sample_idxs = np.random.choice(input_len, sample_len, replace=True)
+            sample_idxs = np.sort(sample_idxs)
+        elif input_len > sample_len:
+            sample_idxs = np.arange(sample_len) * input_len / sample_len
+            for i in range(sample_len-1):
+                sample_idxs[i] = np.random.choice(range(np.int(sample_idxs[i]), np.int(sample_idxs[i+1] + 1)))
+            sample_idxs[-1] = np.random.choice(np.arange(sample_idxs[-2], input_len))
+        else:
+            sample_idxs = np.arange(input_len)
+        
+        return input_feature[sample_idxs.astype(np.int), :]
+
+    def consecutive_sample(self, input_feature, sample_len):
+        
+        input_len = input_feature.shape[0]
+        assert sample_len > 0, "WRONG SAMPLE_LEN {}, THIS PARAM MUST BE GREATER THAN 0.".format(sample_len)
+        
+        if input_len >= sample_len:
+            sample_idx = np.random.choice((input_len - sample_len))
+            return input_feature[sample_idx:(sample_idx+sample_len), :]
+        
+        elif input_len < sample_len:
+            empty_features = np.zeros((sample_len - input_len, input_feature.shape[1]))
+            return np.concatenate((input_feature, empty_features), axis=0)
+
+    def __call__(self, results):
+        """Performs the FormatShape formating.
+
+        Args:
+            results (dict): The resulting dict to be modified and passed
+                to the next transform in pipeline.
+        """
+        raw_feature = results['raw_feature']
+        raw_feature = np.transpose(raw_feature, (1, 0))
+        if self.sample_model == "random":
+            spd_feature = self.random_sample(raw_feature, self.sample_len)
+        elif self.sample_model == 'uniform':
+            spd_feature = self.uniform_sample(raw_feature, self.sample_len)
+        else:
+            spd_feature = self.consecutive_sample(raw_feature, self.sample_len)
+        spd_feature = np.transpose(spd_feature, (1, 0))
+        results['raw_feature'] = spd_feature
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f"(input_format='{self.input_format}')"
+        return repr_str

@@ -3,5 +3,8 @@ from .base import BaseTAGClassifier, BaseTAPGenerator
 from .bmn import BMN
 from .bsn import PEM, TEM
 from .ssn import SSN
+from .acmnet import ACMNet
+from .cola import CoLA
 
-__all__ = ['PEM', 'TEM', 'BMN', 'SSN', 'BaseTAPGenerator', 'BaseTAGClassifier']
+__all__ = ['PEM', 'TEM', 'BMN', 'SSN', 'BaseTAPGenerator', 'BaseTAGClassifier',
+            'ACMNet', 'CoLA']
